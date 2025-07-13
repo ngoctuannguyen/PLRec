@@ -85,23 +85,23 @@ class RoPE(nn.Module):
 #         x = self.token(x) + self.rope(x)    
 #         return self.layer_norm(self.embed_dropout(x)), mask
 
-class LRUEmbedding(nn.Module):
-    def __init__(self, args):
-        super().__init__()
-        vocab_size = args.num_items + 1
-        embed_size = args.bert_hidden_units
+# class LRUEmbedding(nn.Module):
+#     def __init__(self, args):
+#         super().__init__()
+#         vocab_size = args.num_items + 1
+#         embed_size = args.bert_hidden_units
         
-        self.token = nn.Embedding(vocab_size, embed_size)
-        self.layer_norm = nn.LayerNorm(embed_size)
-        self.embed_dropout = nn.Dropout(args.bert_dropout)
+#         self.token = nn.Embedding(vocab_size, embed_size)
+#         self.layer_norm = nn.LayerNorm(embed_size)
+#         self.embed_dropout = nn.Dropout(args.bert_dropout)
 
-    def get_mask(self, x):
-        return (x > 0)
+#     def get_mask(self, x):
+#         return (x > 0)
 
-    def forward(self, x):
-        mask = self.get_mask(x)
-        x = self.token(x)
-        return self.layer_norm(self.embed_dropout(x)), mask
+#     def forward(self, x):
+#         mask = self.get_mask(x)
+#         x = self.token(x)
+#         return self.layer_norm(self.embed_dropout(x)), mask
 
 class LRUModel(nn.Module):
     def __init__(self, args):
@@ -230,8 +230,8 @@ class PositionwiseFeedForward(nn.Module):
         super().__init__()
         self.w_1 = nn.Linear(d_model, d_ff)
         self.w_2 = nn.Linear(d_ff, d_model)
-        # self.activation = nn.GELU()
-        self.activation = nn.SiLU()
+        self.activation = nn.GELU()
+        # self.activation = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(d_model)
 
@@ -283,27 +283,27 @@ class PositionwiseFeedForward(nn.Module):
 #         return self.model(x, self.embedding.token.weight, mask, labels=labels)
 
 
-# class LRUEmbedding(nn.Module):
-#     def __init__(self, args):
-#         super().__init__()
-#         vocab_size = args.num_items + 1
-#         embed_size = args.bert_hidden_units
+class LRUEmbedding(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        vocab_size = args.num_items + 1
+        embed_size = args.bert_hidden_units
         
-#         self.token = nn.Embedding(vocab_size, embed_size)
-#         self.layer_norm = nn.LayerNorm(embed_size)
-#         self.embed_dropout = nn.Dropout(args.bert_dropout)
-#         self.positional_embedding = nn.Embedding(vocab_size, embed_size)
+        self.token = nn.Embedding(vocab_size, embed_size)
+        self.layer_norm = nn.LayerNorm(embed_size)
+        self.embed_dropout = nn.Dropout(args.bert_dropout)
+        self.positional_embedding = nn.Embedding(vocab_size, embed_size)
 
-#     def get_mask(self, x):
-#         return (x > 0)
+    def get_mask(self, x):
+        return (x > 0)
 
-#     def forward(self, x):
-#         mask = self.get_mask(x)
-#         seq_len = x.size(1)
-#         position_ids = torch.arange(seq_len, dtype=torch.long, device=x.device).unsqueeze(0) 
-#         position_emb = self.positional_embedding(position_ids)
-#         x = self.token(x) + position_emb
-#         return self.layer_norm(self.embed_dropout(x)), mask
+    def forward(self, x):
+        mask = self.get_mask(x)
+        seq_len = x.size(1)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=x.device).unsqueeze(0) 
+        position_emb = self.positional_embedding(position_ids)
+        x = self.token(x) + position_emb
+        return self.layer_norm(self.embed_dropout(x)), mask
 
 
 # class LRUModel(nn.Module):
