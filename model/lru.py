@@ -230,8 +230,8 @@ class PositionwiseFeedForward(nn.Module):
         super().__init__()
         self.w_1 = nn.Linear(d_model, d_ff)
         self.w_2 = nn.Linear(d_ff, d_model)
-        self.activation = nn.GELU()
-        # self.activation = nn.SiLU()
+        # self.activation = nn.GELU()
+        self.activation = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(d_model)
 
