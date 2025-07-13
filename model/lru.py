@@ -65,6 +65,26 @@ class RoPE(nn.Module):
         pe_x = rotations_complex * x_complex
         return torch.view_as_real(pe_x).reshape(batch_size, seq_len, d_model)
 
+# class LRUEmbedding(nn.Module):
+#     def __init__(self, args):
+#         super().__init__()
+#         vocab_size = args.num_items + 1
+#         embed_size = args.bert_hidden_units
+        
+#         self.token = nn.Embedding(vocab_size, embed_size)
+#         # self.positional_embedding = nn.Embedding(vocab_size, embed_size)
+#         self.rope = RoPE(vocab_size, embed_size)
+#         self.layer_norm = nn.LayerNorm(embed_size)
+#         self.embed_dropout = nn.Dropout(args.bert_dropout)
+
+#     def get_mask(self, x):
+#         return (x > 0)
+
+#     def forward(self, x):
+#         mask = self.get_mask(x)
+#         x = self.token(x) + self.rope(x)    
+#         return self.layer_norm(self.embed_dropout(x)), mask
+
 class LRUEmbedding(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -72,8 +92,6 @@ class LRUEmbedding(nn.Module):
         embed_size = args.bert_hidden_units
         
         self.token = nn.Embedding(vocab_size, embed_size)
-        # self.positional_embedding = nn.Embedding(vocab_size, embed_size)
-        self.rope = RoPE(vocab_size, embed_size)
         self.layer_norm = nn.LayerNorm(embed_size)
         self.embed_dropout = nn.Dropout(args.bert_dropout)
 
@@ -82,9 +100,8 @@ class LRUEmbedding(nn.Module):
 
     def forward(self, x):
         mask = self.get_mask(x)
-        x = self.token(x) + self.rope(x)    
+        x = self.token(x)
         return self.layer_norm(self.embed_dropout(x)), mask
-
 
 class LRUModel(nn.Module):
     def __init__(self, args):
