@@ -7,8 +7,9 @@ import torch.utils.data as data_utils
 
 
 def worker_init_fn(worker_id):
-    random.seed(np.random.get_state()[1][0] + worker_id)                                                      
-    np.random.seed(np.random.get_state()[1][0] + worker_id)
+    seed = int(torch.initial_seed()) % (2**32)
+    np.random.seed(seed + worker_id)
+    random.seed(seed + worker_id)
 
 
 class SASDataloader():
@@ -193,3 +194,4 @@ class SASTestDataset(data_utils.Dataset):
         # seq = [0] * padding_len + seq
 
         # return torch.LongTensor(seq), torch.LongTensor(candidates), torch.LongTensor(labels)
+
