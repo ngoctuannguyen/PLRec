@@ -224,20 +224,35 @@ class LRULayer(nn.Module):
         x = self.dropout(self.out_proj(h).real) + self.out_vector(x)
         return self.layer_norm(x)  # residual connection introduced above 
     
+class SwiGLU(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.linear1 = nn.Linear(in_features, out_features * 2)
+        self.linear2 = nn.Linear(in_features, out_features)
+    
+    def forward(self, x):
+        hidden_states = self.linear1(x)
+        gate, activated = hidden_states.chunk(2, dim=-1)
+        activated = F.silu(activated)
+        output = self.linear2(gate * activated)
+        return output
+
 
 class PositionwiseFeedForward(nn.Module):
     def __init__(self, d_model, d_ff, dropout=0.1):
         super().__init__()
-        self.w_1 = nn.Linear(d_model, d_ff)
+        self.w_1 = nn.Linear(d_model, d_ff * 2)  # *2 cho SwiGLU
         self.w_2 = nn.Linear(d_ff, d_model)
-        # self.activation = nn.GELU()
-        self.activation = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(d_model)
 
     def forward(self, x):
-        x_ = self.dropout(self.activation(self.w_1(x)))
-        return self.layer_norm(self.dropout(self.w_2(x_)) + x)
+        x_proj = self.w_1(x)  # [B, L, d_ff*2]
+        gate, act = x_proj.chunk(2, dim=-1)
+        act = F.silu(act)
+        x_ = self.dropout(gate * act)
+        x_ = self.dropout(self.w_2(x_))
+        return self.layer_norm(x_ + x)
     
 
 ### LRU PE
