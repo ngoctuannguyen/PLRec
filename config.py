@@ -132,6 +132,9 @@ parser.add_argument('--bert_attn_dropout', type=float, default=None)
 parser.add_argument('--bert_mask_prob', type=float, default=None)
 
 ################
-
+# IDCL
+################
+parser.add_argument('--idcl_temperature', type=float, default=0.2)
+parser.add_argument('--idcl_weight', type=float, default=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
 
 args = parser.parse_args()
