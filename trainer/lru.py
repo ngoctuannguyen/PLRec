@@ -24,9 +24,10 @@ class LRUTrainer(BaseTrainer):
         
         if self.args.dataset_code != 'xlong':
             logits, hidden_items = self.model(seqs)
+            print("Hidden items", hidden_items)
             logits = logits.reshape(-1, logits.size(-1))
             labels = labels.reshape(-1)
-            loss = self.ce(logits, labels) + 0.1 * self.IDCL(seqs, hidden_items)
+            loss = self.ce(logits, labels) + 0.3 * self.IDCL(labels, hidden_items)
         else:
             logits, labels_ = self.model(seqs, labels=labels)
             logits = logits.reshape(-1, logits.size(-1))
