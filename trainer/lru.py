@@ -27,6 +27,7 @@ class LRUTrainer(BaseTrainer):
             print("Hidden items", hidden_items)
             logits = logits.reshape(-1, logits.size(-1))
             labels = labels.reshape(-1)
+            ##### 0.3 is a weight factor of loss function
             loss = self.ce(logits, labels) + 0.3 * self.IDCL(labels, hidden_items)
         else:
             logits, labels_ = self.model(seqs, labels=labels)
