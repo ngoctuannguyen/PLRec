@@ -12,6 +12,10 @@ class LRU(nn.Module):
         self.embedding = LRUEmbedding(self.args)
         self.model = LRUModel(self.args)
         self.truncated_normal_init()
+        self.category_embedding = torch.load(f'./dataset/{args.dataset_code}/cat.pt').float()
+
+    def get_category_embedding(self):
+        return self.category_embedding
 
     def truncated_normal_init(self, mean=0, std=0.02, lower=-0.04, upper=0.04):
         with torch.no_grad():
@@ -39,31 +43,27 @@ class LRU(nn.Module):
         x, mask = self.embedding(x)
         return self.model(x, self.embedding.token.weight, mask, labels=labels)
 
-class RoPE(nn.Module):
-    def __init__(self, seq_len, d_model, base=10000):
+class LRUEmbedding(nn.Module):
+    def __init__(self, args):
         super().__init__()
+        vocab_size = args.num_items + 1
+        embed_size = args.bert_hidden_units
+        
+        self.token = nn.Embedding(vocab_size, embed_size)
+        self.layer_norm = nn.LayerNorm(embed_size)
+        self.embed_dropout = nn.Dropout(args.bert_dropout)
+        self.positional_embedding = nn.Embedding(vocab_size, embed_size)
 
-        k_max = d_model // 2
-        theta = 1 / (base ** (torch.arange(k_max) / k_max))
-        angles = torch.outer(torch.arange(seq_len), theta)
-
-        rotations_re = torch.cos(angles).unsqueeze(dim=-1)
-        rotations_im = torch.sin(angles).unsqueeze(dim=-1)
-        rotations = torch.cat([rotations_re, rotations_im], dim=-1)  # [seq_len, k_max, 2]
-        rotations = rotations.reshape(seq_len, -1)  # [seq_len, d_model]
-        self.register_buffer('rotations', rotations)
+    def get_mask(self, x):
+        return (x > 0)
 
     def forward(self, x):
-        # x: [batch_size, seq_len, d_model]
-        if x.dtype != torch.float32:
-            x = x.to(torch.float32)
-        batch_size, seq_len, d_model = x.shape
-        rotations = self.rotations[:seq_len]  # [seq_len, d_model]
-        rotations = rotations.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, seq_len, d_model]
-        x_complex = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2))
-        rotations_complex = torch.view_as_complex(rotations.reshape(*rotations.shape[:-1], -1, 2))
-        pe_x = rotations_complex * x_complex
-        return torch.view_as_real(pe_x).reshape(batch_size, seq_len, d_model)
+        mask = self.get_mask(x)
+        seq_len = x.size(1)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=x.device).unsqueeze(0) 
+        position_emb = self.positional_embedding(position_ids)
+        x = self.token(x) + position_emb
+        return self.layer_norm(self.embed_dropout(x)), mask
 
 class LRUModel(nn.Module):
     def __init__(self, args):

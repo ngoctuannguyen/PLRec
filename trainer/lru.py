@@ -18,6 +18,7 @@ class LRUTrainer(BaseTrainer):
     def __init__(self, args, model, train_loader, val_loader, test_loader, export_root, use_wandb):
         super().__init__(args, model, train_loader, val_loader, test_loader, export_root, use_wandb)
         self.ce = nn.CrossEntropyLoss(ignore_index=0)
+        self.bce = nn.BCEWithLogitsLoss(ignore_index=0)
 
     def calculate_loss(self, batch):
         seqs, labels = batch
@@ -28,7 +29,7 @@ class LRUTrainer(BaseTrainer):
             logits = logits.reshape(-1, logits.size(-1))
             labels = labels.reshape(-1)
             ##### 0.3 is a weight factor of loss function
-            loss = self.ce(logits, labels) + 0.3 * self.IDCL(labels, hidden_items)
+            loss = self.ce(logits, labels) + args.contrastive_loss_weight * self.IDCL(labels, hidden_items)
         else:
             logits, labels_ = self.model(seqs, labels=labels)
             logits = logits.reshape(-1, logits.size(-1))
@@ -36,6 +37,8 @@ class LRUTrainer(BaseTrainer):
             labels_ = labels_.view(-1)
             loss = self.ce(logits, labels_)
         return loss 
+    
+    # def CP(self, ):
     
     def IDCL(self, seqs, logits):
         # logits: [batch_size, seq_len, embed_dim]

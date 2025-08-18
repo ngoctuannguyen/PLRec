@@ -130,6 +130,7 @@ parser.add_argument('--bert_head_size', type=int, default=32)
 parser.add_argument('--bert_dropout', type=float, default=None)
 parser.add_argument('--bert_attn_dropout', type=float, default=None)
 parser.add_argument('--bert_mask_prob', type=float, default=None)
+parser.add_argument('--contrastive_loss_weight', type=float, default=0.1)
 
 ################
 # IDCL
