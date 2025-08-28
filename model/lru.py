@@ -12,10 +12,12 @@ class LRU(nn.Module):
         self.embedding = LRUEmbedding(self.args)
         self.model = LRUModel(self.args)
         self.truncated_normal_init()
-        self.category_embedding = torch.load(f'./dataset/{args.dataset_code}/cat.pt').float()
+        cat_emb = torch.load(f'./data/{args.dataset_code}/cat.pt').float()
+        self.cat_embedding = nn.Embedding.from_pretrained(cat_emb)
+        self.cat_linear = nn.Linear(args.bert_hidden_units, cat_emb.shape[-1])
 
     def get_category_embedding(self):
-        return self.category_embedding
+        return self.cat_embedding
 
     def truncated_normal_init(self, mean=0, std=0.02, lower=-0.04, upper=0.04):
         with torch.no_grad():

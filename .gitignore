@@ -1,6 +1,5 @@
 *.pyc
 *.p
-*.pt
 *.pth
 .DS_Store
 

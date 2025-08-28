@@ -18,18 +18,18 @@ class LRUTrainer(BaseTrainer):
     def __init__(self, args, model, train_loader, val_loader, test_loader, export_root, use_wandb):
         super().__init__(args, model, train_loader, val_loader, test_loader, export_root, use_wandb)
         self.ce = nn.CrossEntropyLoss(ignore_index=0)
-        self.bce = nn.BCEWithLogitsLoss(ignore_index=0)
+        self.bce = nn.BCEWithLogitsLoss()
 
     def calculate_loss(self, batch):
         seqs, labels = batch
         
         if self.args.dataset_code != 'xlong':
             logits, hidden_items = self.model(seqs)
-            print("Hidden items", hidden_items)
+            # print("Hidden items", hidden_items)
             logits = logits.reshape(-1, logits.size(-1))
             labels = labels.reshape(-1)
             ##### 0.3 is a weight factor of loss function
-            loss = self.ce(logits, labels) + args.contrastive_loss_weight * self.IDCL(labels, hidden_items)
+            loss = self.ce(logits, labels) + args.contrastive_loss_weight * self.CP(seqs)
         else:
             logits, labels_ = self.model(seqs, labels=labels)
             logits = logits.reshape(-1, logits.size(-1))
@@ -38,7 +38,19 @@ class LRUTrainer(BaseTrainer):
             loss = self.ce(logits, labels_)
         return loss 
     
-    # def CP(self, ):
+    def CP(self, input, padding_idx=0):
+        # print("Input", input.shape)
+        item_list = input
+        # print("Item list size", item_list.shape)
+        nonzero_idx = torch.where(input != padding_idx)
+        # print("Non zero index", nonzero_idx)
+        item_emb = self.model.embedding(item_list)[0]
+        # print(item_emb.shape)
+        # print("Cat Embedding:", torch.cat([item_emb], dim=-1))
+        item_attribute_score = self.model.cat_linear(item_emb)
+        item_attribute_target = self.model.cat_embedding(item_list)
+        attr_loss = self.bce(item_attribute_score[nonzero_idx], item_attribute_target[nonzero_idx])
+        return attr_loss
     
     def IDCL(self, seqs, logits):
         # logits: [batch_size, seq_len, embed_dim]
