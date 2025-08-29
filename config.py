@@ -135,7 +135,7 @@ parser.add_argument('--contrastive_loss_weight', type=float, default=0.1)
 ################
 # IDCL
 ################
-parser.add_argument('--idcl_temperature', type=float, default=0.2)
-parser.add_argument('--idcl_weight', type=float, default=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+parser.add_argument('--idcl_temperature', type=float, default=0.1)
+parser.add_argument('--CP_loss_weight', type=float, default=0.1)
 
 args = parser.parse_args()
