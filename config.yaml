@@ -1,0 +1,29 @@
+# dataset: amazon-beauty
+dataset: amazon-beauty
+MAX_ITEM_LIST_LENGTH: 50      # 50 for Amazon datasets
+
+USER_ID_FIELD: user_id
+ITEM_ID_FIELD: item_id
+load_col:
+    inter: [user_id, item_id, timestamp]
+
+user_inter_num_interval: "[5,inf)"
+item_inter_num_interval: "[5,inf)"
+seed: 42
+loss_type: 'CE'                 # (str) Type of loss function. Range in ['BPR', 'CE'].
+dataset_code: amazon-beauty
+bert_hidden_units: 64
+bert_num_blocks: 2
+bert_num_heads: 2
+bert_dropout: 0.2
+bert_attn_dropout: 0.2
+bert_mask_prob: 0.2
+
+negative_sample_size: 100
+xlong_negative_sample_size: 10000
+
+# -------------------
+# Custom embedding paths
+# -------------------
+cat_embedding_path: "./data/ml-1m/cat.pt"
+txt_embedding_path: "./data/ml-1m/txt_embeddings.pt"
