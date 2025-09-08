@@ -21,6 +21,7 @@ bert_mask_prob: 0.2
 
 negative_sample_size: 100
 xlong_negative_sample_size: 10000
+train_neg_sample_args: ~
 
 # -------------------
 # Custom embedding paths

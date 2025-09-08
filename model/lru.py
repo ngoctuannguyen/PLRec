@@ -3,27 +3,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import numpy as np
-from recbole.model.abstract_recommender import SequentialRecommender
-from recbole.utils import ModelType
 
-class LRU(SequentialRecommender):
-    type = ModelType.SEQUENTIAL
-    def __init__(self, config, dataset):
-        super(LRU, self).__init__(config, dataset)
-        self.config = config
 
-        self.embedding = LRUEmbedding(config)
-        self.model = LRUModel(config)
-
+class LRU(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.embedding = LRUEmbedding(self.args)
+        self.model = LRUModel(self.args)
         self.truncated_normal_init()
-
-        cat_emb = torch.load(f"./data/{config['dataset_code']}/cat.pt").float()
-        self.cat_embedding = nn.Embedding.from_pretrained(cat_emb)
-        self.cat_linear = nn.Linear(2 * config['bert_hidden_units'], cat_emb.shape[-1])
-
-        txt_emb = torch.load(f"./data/{config['dataset_code']}/txt_embeddings.pt").float()
-        self.txt_embedding = nn.Embedding.from_pretrained(txt_emb)
-        self.txt_linear = nn.Linear(txt_emb.shape[-1], config['bert_hidden_units'])
+        cat_emb = torch.load(f'./data/{args.dataset_code}/cat.pt').float()
+        self.cat_embedding = nn.Embedding.from_pretrained(cat_emb).to(args.device)
+        self.cat_linear = nn.Linear(2 * args.bert_hidden_units, cat_emb.shape[-1])
+        txt_emb = torch.load(f'./data/{args.dataset_code}/txt_embeddings.pt').float()
+        self.txt_embedding = nn.Embedding.from_pretrained(txt_emb).to(args.device)
+        self.txt_linear = nn.Linear(txt_emb.shape[-1], args.bert_hidden_units)
 
     def get_category_embedding(self):
         return self.cat_embedding
@@ -54,16 +48,15 @@ class LRU(SequentialRecommender):
         x, mask = self.embedding(x)
         return self.model(x, self.embedding.token.weight, mask, labels=labels)
 
-
 class LRUEmbedding(nn.Module):
-    def __init__(self, config):
+    def __init__(self, args):
         super().__init__()
-        vocab_size = config['num_items'] + 1
-        embed_size = config['bert_hidden_units']
-
+        vocab_size = args.num_items + 1
+        embed_size = args.bert_hidden_units
+        
         self.token = nn.Embedding(vocab_size, embed_size)
         self.layer_norm = nn.LayerNorm(embed_size)
-        self.embed_dropout = nn.Dropout(config['bert_dropout'])
+        self.embed_dropout = nn.Dropout(args.bert_dropout)
         self.positional_embedding = nn.Embedding(vocab_size, embed_size)
 
     def get_mask(self, x):
@@ -72,67 +65,68 @@ class LRUEmbedding(nn.Module):
     def forward(self, x):
         mask = self.get_mask(x)
         seq_len = x.size(1)
-        position_ids = torch.arange(seq_len, dtype=torch.long, device=x.device).unsqueeze(0)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=x.device).unsqueeze(0) 
         position_emb = self.positional_embedding(position_ids)
         x = self.token(x) + position_emb
         return self.layer_norm(self.embed_dropout(x)), mask
 
-
 class LRUModel(nn.Module):
-    def __init__(self, config):
+    def __init__(self, args):
         super().__init__()
-        self.config = config
-        self.hidden_size = config['bert_hidden_units']
-        layers = config['bert_num_blocks']
+        self.args = args
+        self.hidden_size = args.bert_hidden_units
+        # self.hidden_size =20
+        layers = args.bert_num_blocks
 
-        self.lru_blocks = nn.ModuleList([LRUBlock(config) for _ in range(layers)])
-        self.bias = torch.nn.Parameter(torch.zeros(config['num_items'] + 1))
+        self.lru_blocks = nn.ModuleList([LRUBlock(self.args) for _ in range(layers)])
+        self.bias = torch.nn.Parameter(torch.zeros(args.num_items + 1))
 
     def forward(self, x, embedding_weight, mask, labels=None):
+        # left padding to the power of 2
         seq_len = x.size(1)
         log2_L = int(np.ceil(np.log2(seq_len)))
         x = F.pad(x, (0, 0, 2 ** log2_L - x.size(1), 0, 0, 0))
         mask_ = F.pad(mask, (2 ** log2_L - mask.size(1), 0, 0, 0))
 
+        # LRU blocks with pffn
         for lru_block in self.lru_blocks:
             x = lru_block.forward(x, mask_)
-        x = x[:, -seq_len:]
-
-        if self.config['dataset_code'] != 'xlong':
+        x = x[:, -seq_len:]  # B x L x D (64)
+        
+        # prediction layer
+        if self.args.dataset_code != 'xlong':
             scores = torch.matmul(x, embedding_weight.permute(1, 0)) + self.bias
             return scores, x
         else:
             assert labels is not None
             if self.training:
-                num_samples = self.config['negative_sample_size']
-                samples = torch.randint(1, self.config['num_items'] + 1,
-                                        size=(*x.shape[:2], num_samples,))
+                num_samples = self.args.negative_sample_size  # 100
+                samples = torch.randint(1, self.args.num_items+1, size=(*x.shape[:2], num_samples,))
                 all_items = torch.cat([samples.to(labels.device), labels.unsqueeze(-1)], dim=-1)
                 sampled_embeddings = embedding_weight[all_items]
                 scores = torch.einsum('b l d, b l i d -> b l i', x, sampled_embeddings) + self.bias[all_items]
                 labels_ = (torch.ones(labels.shape).long() * num_samples).to(labels.device)
                 return scores, labels_
             else:
-                num_samples = self.config['xlong_negative_sample_size']
-                samples = torch.randint(1, self.config['num_items'] + 1,
-                                        size=(x.shape[0], num_samples,))
+                num_samples = self.args.xlong_negative_sample_size  # 10000
+                samples = torch.randint(1, self.args.num_items+1, size=(x.shape[0], num_samples,))  # only one time step
                 all_items = torch.cat([samples.to(labels.device), labels], dim=-1)
                 sampled_embeddings = embedding_weight[all_items]
-                scores = torch.einsum('b l d, b i d -> b l i', x, sampled_embeddings) + self.bias[
-                    all_items.unsqueeze(1)]
+                scores = torch.einsum('b l d, b i d -> b l i', x, sampled_embeddings) + self.bias[all_items.unsqueeze(1)]
                 labels_ = (torch.ones(labels.shape).long() * num_samples).to(labels.device)
                 return scores, labels_.reshape(labels.shape)
-
+            
 
 class LRUBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, args):
         super().__init__()
-        hidden_size = config['bert_hidden_units']
+        self.args = args
+        hidden_size = args.bert_hidden_units
         self.lru_layer = LRULayer(
-            d_model=hidden_size, dropout=config['bert_attn_dropout'])
+            d_model=hidden_size, dropout=args.bert_attn_dropout)
         self.feed_forward = PositionwiseFeedForward(
-            d_model=hidden_size, d_ff=hidden_size * 4, dropout=config['bert_dropout'])
-
+            d_model=hidden_size, d_ff=hidden_size*4, dropout=args.bert_dropout)
+    
     def forward(self, x, mask):
         x = self.lru_layer(x, mask)
         x = self.feed_forward(x)
@@ -209,6 +203,7 @@ class SwiGLU(nn.Module):
         activated = F.silu(activated)
         output = self.linear2(gate * activated)
         return output
+
 
 class PositionwiseFeedForward(nn.Module):
     def __init__(self, d_model, d_ff, dropout=0.1):
