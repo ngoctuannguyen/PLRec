@@ -29,7 +29,7 @@ class LRUTrainer(BaseTrainer):
             logits = logits.reshape(-1, logits.size(-1))
             labels = labels.reshape(-1)
             ##### 0.3 is a weight factor of loss function
-            loss = self.ce(logits, labels) + args.idcl_temperature * self.IDCL(seqs, hidden_items) + \
+            loss = self.ce(logits, labels) + \
                   args.CP_loss_weight * self.CP(seqs)
         else:
             logits, labels_ = self.model(seqs, labels=labels)
@@ -40,17 +40,22 @@ class LRUTrainer(BaseTrainer):
         return loss 
     
     def CP(self, input, padding_idx=0):
-        # print("Input", input.shape)
+        # print("Input", input.dtype)
         item_list = input
-        # print("Item list size", item_list.shape)
+        # print("max item", self.args.num_items)
+        # fill_zero = torch.zeros(input.shape[0], self.args.num_items - input.shape[1], dtype=torch.int64).to(self.args.device)
+        # item_list = torch.cat((item_list.to(self.args.device), fill_zero), dim=1)
+        # print("Item list", item_list.shape)
         nonzero_idx = torch.where(input != padding_idx)
-        # print("Non zero index", nonzero_idx)
         item_emb = self.model.embedding(item_list)[0]
+        # print("Shape ", self.model.txt_embedding.weight.shape)
         txt_emb = self.model.txt_embedding(item_list)
         txt_emb = self.model.txt_linear(txt_emb)
         # print(item_emb.shape)
         # print("Cat Embedding:", torch.cat([item_emb], dim=-1))
+        # item_attribute_score = self.model.cat_linear(torch.cat([item_emb, txt_emb], dim=-1))
         item_attribute_score = self.model.cat_linear(torch.cat([item_emb, txt_emb], dim=-1))
+        # print("Shape", self.model.cat_embedding.weight.shape)
         item_attribute_target = self.model.cat_embedding(item_list)
         attr_loss = self.bce(item_attribute_score[nonzero_idx], item_attribute_target[nonzero_idx])
         return attr_loss

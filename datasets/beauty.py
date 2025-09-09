@@ -59,7 +59,7 @@ class BeautyDataset(AbstractDataset):
             return
         if not dataset_path.parent.is_dir():
             dataset_path.parent.mkdir(parents=True)
-        self.maybe_download_raw_dataset()
+        # self.maybe_download_raw_dataset()
         df = self.load_ratings_df()
         df = self.remove_immediate_repeats(df)
         # df = self.filter_triplets(df)
