@@ -63,11 +63,10 @@ class LRUEmbedding(nn.Module):
         return (x > 0)
 
     def forward(self, x):
-        mask = self.get_mask(x)
-        seq_len = x.size(1)
-        position_ids = torch.arange(seq_len, dtype=torch.long, device=x.device).unsqueeze(0) 
-        position_emb = self.positional_embedding(position_ids)
-        x = self.token(x) + position_emb
+        mask = self.get_mask(x)                   
+        positional_ids = torch.cumsum(mask, dim=1)   
+        positional_ids = positional_ids * mask       
+        x = self.token(x) + self.positional_embedding(positional_ids)
         return self.layer_norm(self.embed_dropout(x)), mask
 
 class LRUModel(nn.Module):
