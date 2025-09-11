@@ -237,6 +237,8 @@ class BaseTrainer(metaclass=ABCMeta):
                 MetricGraphPrinter(key='NDCG@%d' % k, graph_name='NDCG@%d' % k, group_name='Test', use_wandb=self.use_wandb))
             test_loggers.append(
                 MetricGraphPrinter(key='MRR@%d' % k, graph_name='MRR@%d' % k, group_name='Test', use_wandb=self.use_wandb))
+            test_loggers.append(
+                MetricGraphPrinter(key='HR@%d' % k, graph_name='HR@%d' % k, group_name='Test', use_wandb=self.use_wandb))
 
         return val_loggers, test_loggers
 

@@ -56,6 +56,7 @@ def absolute_recall_mrr_ndcg_for_ks(scores, labels, ks):
                              for n in answer_count]).to(dcg.device)
         ndcg = (dcg / idcg).mean()
         metrics['NDCG@%d' % k] = ndcg.cpu().item()
+        metrics['HR@%d' % k] = (hits.sum(1) > 0).float().mean().cpu().item()
 
     return metrics
 

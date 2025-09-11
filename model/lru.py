@@ -45,7 +45,7 @@ class LRU(nn.Module):
                         p.add_(mean)
 
     def forward(self, x, labels=None):
-        x, mask = self.embedding(x)
+        x, mask, pe = self.embedding(x)
         return self.model(x, self.embedding.token.weight, mask, labels=labels)
 
 class LRUEmbedding(nn.Module):
@@ -61,13 +61,14 @@ class LRUEmbedding(nn.Module):
 
     def get_mask(self, x):
         return (x > 0)
-
+    
     def forward(self, x):
         mask = self.get_mask(x)                   
         positional_ids = torch.cumsum(mask, dim=1)   
-        positional_ids = positional_ids * mask       
-        x = self.token(x) + self.positional_embedding(positional_ids)
-        return self.layer_norm(self.embed_dropout(x)), mask
+        positional_ids = positional_ids * mask
+        pos_emb = self.positional_embedding(positional_ids)       
+        x = self.token(x) + pos_emb
+        return self.layer_norm(self.embed_dropout(x)), mask, pos_emb
 
 class LRUModel(nn.Module):
     def __init__(self, args):
@@ -207,7 +208,6 @@ class SwiGLU(nn.Module):
 class PositionwiseFeedForward(nn.Module):
     def __init__(self, d_model, d_ff, dropout=0.1):
         super().__init__()
-        # multiplied by 2 because of chunking to get gate and activation
         self.w_1 = nn.Linear(d_model, d_ff * 2)
         self.w_2 = nn.Linear(d_ff, d_model)
         self.dropout = nn.Dropout(dropout)

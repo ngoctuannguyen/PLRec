@@ -40,22 +40,12 @@ class LRUTrainer(BaseTrainer):
         return loss 
     
     def CP(self, input, padding_idx=0):
-        # print("Input", input.dtype)
         item_list = input
-        # print("max item", self.args.num_items)
-        # fill_zero = torch.zeros(input.shape[0], self.args.num_items - input.shape[1], dtype=torch.int64).to(self.args.device)
-        # item_list = torch.cat((item_list.to(self.args.device), fill_zero), dim=1)
-        # print("Item list", item_list.shape)
         nonzero_idx = torch.where(input != padding_idx)
-        item_emb = self.model.embedding(item_list)[0]
-        # print("Shape ", self.model.txt_embedding.weight.shape)
+        item_emb, pos_emb = self.model.embedding(item_list)[0], self.model.embedding(item_list)[2]
         txt_emb = self.model.txt_embedding(item_list)
-        txt_emb = self.model.txt_linear(txt_emb)
-        # print(item_emb.shape)
-        # print("Cat Embedding:", torch.cat([item_emb], dim=-1))
-        # item_attribute_score = self.model.cat_linear(torch.cat([item_emb, txt_emb], dim=-1))
+        txt_emb = self.model.txt_linear(txt_emb) + pos_emb
         item_attribute_score = self.model.cat_linear(torch.cat([item_emb, txt_emb], dim=-1))
-        # print("Shape", self.model.cat_embedding.weight.shape)
         item_attribute_target = self.model.cat_embedding(item_list)
         attr_loss = self.bce(item_attribute_score[nonzero_idx], item_attribute_target[nonzero_idx])
         return attr_loss
