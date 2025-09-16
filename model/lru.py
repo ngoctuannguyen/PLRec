@@ -66,8 +66,9 @@ class LRUEmbedding(nn.Module):
         mask = self.get_mask(x)                   
         positional_ids = torch.cumsum(mask, dim=1)   
         positional_ids = positional_ids * mask
-        pos_emb = self.positional_embedding(positional_ids)       
-        x = self.token(x) + pos_emb
+        pos_emb = self.positional_embedding(positional_ids)      
+        x = self.token(x) 
+        # + pos_emb
         return self.layer_norm(self.embed_dropout(x)), mask, pos_emb
 
 class LRUModel(nn.Module):
