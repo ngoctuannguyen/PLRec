@@ -61,7 +61,7 @@ def set_template(args):
 
     args.metric_ks = [1, 5, 10, 20, 50]
     args.best_metric = 'NDCG@10'
-    args.bert_num_blocks = 2
+    # args.bert_num_blocks = 2
     args.bert_num_heads = 2
     args.bert_head_size = None
 
