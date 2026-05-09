@@ -138,4 +138,28 @@ parser.add_argument('--contrastive_loss_weight', type=float, default=0.1)
 parser.add_argument('--idcl_temperature', type=float, default=0.1)
 parser.add_argument('--CP_loss_weight', type=float, default=0.1)
 
+################
+# MoE (Category Prediction)
+################
+parser.add_argument('--moe_num_experts', type=int, default=4)
+parser.add_argument('--moe_num_experts_per_token', type=int, default=2)
+parser.add_argument('--moe_hidden_dim', type=int, default=128)
+parser.add_argument('--moe_num_heads', type=int, default=2)
+parser.add_argument('--moe_load_balance_weight', type=float, default=0.01)
+
+################
+# LLM
+################
+parser.add_argument('--use_llm_rerank', action='store_true', default=False)
+parser.add_argument('--llm_model', type=str, default='gpt-4o-mini')
+parser.add_argument('--llm_api_key', type=str, default=None)
+parser.add_argument('--llm_api_base', type=str, default=None)
+parser.add_argument('--llm_candidate_size', type=int, default=10)
+parser.add_argument('--llm_temperature', type=float, default=0.0)
+parser.add_argument('--llm_max_history', type=int, default=20)
+parser.add_argument('--test_only', action='store_true', default=False)
+parser.add_argument('--use_kd', action='store_true', default=False)
+parser.add_argument('--kd_weight', type=float, default=0.1)
+parser.add_argument('--kd_temperature', type=float, default=1.0)
+
 args = parser.parse_args()

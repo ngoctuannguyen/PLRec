@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-qwen2.5-awq
+    ports:
+      - "8010:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      - ./experiments/lora/games_qwen2.5_7b/final_adapter:/lora_adapter
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: >
+      --model Qwen/Qwen2.5-7B-Instruct
+      --tensor-parallel-size 1
+      --gpu-memory-utilization 0.8
+      --max-model-len 2048
+      --enable-lora
+      --lora-modules games_rec=/lora_adapter

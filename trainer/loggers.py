@@ -63,6 +63,31 @@ class MetricGraphPrinter(AbstractBaseLogger):
         self.log(writer, *args, **kwargs)
 
 
+class FileLogger(AbstractBaseLogger):
+    def __init__(self, file_path, prefix=""):
+        self.file_path = file_path
+        self.prefix = prefix
+        if not os.path.exists(os.path.dirname(self.file_path)):
+            os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
+
+    def log(self, *args, **kwargs):
+        epoch = kwargs.get('epoch', 'N/A')
+        accum_iter = kwargs.get('accum_iter', 'N/A')
+        
+        metrics = []
+        for k, v in kwargs.items():
+            if k not in ['state_dict', 'epoch', 'accum_iter']:
+                if isinstance(v, float):
+                    metrics.append(f"{k}: {v:.4f}")
+                else:
+                    metrics.append(f"{k}: {v}")
+                    
+        log_str = f"[{self.prefix}] Epoch: {epoch} | Iter: {accum_iter} | " + " | ".join(metrics) + "\n"
+        
+        with open(self.file_path, 'a') as f:
+            f.write(log_str)
+
+
 class RecentModelLogger(AbstractBaseLogger):
     def __init__(self, args, checkpoint_path, filename='checkpoint-recent.pth'):
         self.args = args

@@ -102,6 +102,7 @@ class BaseTrainer(metaclass=ABCMeta):
                 self.exit_training = self.validate(epoch, accum_iter)  # val after certain iterations
                 if self.exit_training: break
 
+        self.current_train_loss = average_meter_set['loss'].avg
         return accum_iter
 
     def validate(self, epoch, accum_iter):
@@ -111,6 +112,11 @@ class BaseTrainer(metaclass=ABCMeta):
             tqdm_dataloader = tqdm(self.val_loader)
             for batch_idx, batch in enumerate(tqdm_dataloader):
                 batch = self.to_device(batch)
+                
+                # Compute validation loss
+                val_loss = self.calculate_loss(batch)
+                average_meter_set.update('val_loss', val_loss.item())
+                
                 metrics = self.calculate_metrics(batch)
                 self._update_meter_set(average_meter_set, metrics)
                 self._update_dataloader_metrics(
@@ -120,6 +126,7 @@ class BaseTrainer(metaclass=ABCMeta):
                 'state_dict': (self._create_state_dict()),
                 'epoch': epoch+1,
                 'accum_iter': accum_iter,
+                'train_loss': getattr(self, 'current_train_loss', 0.0),
             }
             log_data.update(average_meter_set.averages())
         
@@ -227,8 +234,17 @@ class BaseTrainer(metaclass=ABCMeta):
             val_loggers.append(
                 MetricGraphPrinter(key='MRR@%d' % k, graph_name='MRR@%d' % k, group_name='Validation', use_wandb=self.use_wandb))
 
+        # Add loss loggers
+        val_loggers.append(
+            MetricGraphPrinter(key='train_loss', graph_name='Train_Loss', group_name='Loss', use_wandb=self.use_wandb))
+        val_loggers.append(
+            MetricGraphPrinter(key='val_loss', graph_name='Val_Loss', group_name='Loss', use_wandb=self.use_wandb))
+
         val_loggers.append(RecentModelLogger(self.args, model_checkpoint))
         val_loggers.append(BestModelLogger(self.args, model_checkpoint, metric_key=self.best_metric))
+
+        log_file = root.joinpath('training.log')
+        val_loggers.append(FileLogger(str(log_file), prefix='Validation'))
 
         for k in self.metric_ks:
             test_loggers.append(
@@ -239,6 +255,8 @@ class BaseTrainer(metaclass=ABCMeta):
                 MetricGraphPrinter(key='MRR@%d' % k, graph_name='MRR@%d' % k, group_name='Test', use_wandb=self.use_wandb))
             test_loggers.append(
                 MetricGraphPrinter(key='HR@%d' % k, graph_name='HR@%d' % k, group_name='Test', use_wandb=self.use_wandb))
+                
+        test_loggers.append(FileLogger(str(log_file), prefix='Test'))
 
         return val_loggers, test_loggers
 

@@ -1,0 +1,6 @@
+torch
+wandb
+pytorch_lightning
+openai
+pandas
+tensorboard
