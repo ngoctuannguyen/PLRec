@@ -117,16 +117,12 @@ class SSCModule(nn.Module):
             S = h_chunk.size(1)
             
             if num_mem > 0:
-                past_mems = memory_tensor[:, :num_mem, :]  # [B, Num_Mem, D]
-                past_means = mean_pool_tensor[:, :num_mem, :]  # [B, Num_Mem, D]
+                past_mems = memory_tensor[:, :num_mem, :].clone()  # [B, Num_Mem, D]
+                past_means = mean_pool_tensor[:, :num_mem, :].clone()  # [B, Num_Mem, D]
                 
-                # Routing Query (u_t = x_t W_u)
                 u_chunk = self.w_u(h_chunk)  # [B, S, D]
-                
-                # Relevance scores cho past chunks: r_t^(i) = <u_t, MeanPooling(S^(i))>
                 past_scores = torch.bmm(u_chunk, past_means.transpose(1, 2)) / (self.hidden_size ** 0.5) # [B, S, Num_Mem]
                 
-                # Chọn Top-K
                 topk_k = min(self.top_k, num_mem)
                 if num_mem > topk_k:
                     topk_vals, topk_idx = torch.topk(past_scores, topk_k, dim=-1)
