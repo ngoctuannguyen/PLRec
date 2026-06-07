@@ -59,6 +59,7 @@ class NTNRecModel(nn.Module):
         self.ssc = SSCModule(
             hidden_size=self.hidden_size,
             chunk_size=args.mc_chunk_size,
+            stride=args.mc_stride,
             top_k=args.mc_top_k
         )
         
@@ -92,10 +93,11 @@ class NTNRecModel(nn.Module):
                 return scores, labels_
 
 class SSCModule(nn.Module):
-    def __init__(self, hidden_size, chunk_size, top_k=2):
+    def __init__(self, hidden_size, chunk_size, stride, top_k=2):
         super().__init__()
         self.hidden_size = hidden_size
         self.chunk_size = chunk_size
+        self.stride = stride
         self.top_k = top_k
         
         self.w_u = nn.Linear(hidden_size, hidden_size)
@@ -104,14 +106,16 @@ class SSCModule(nn.Module):
         B, L, D = h_sequence.size()
         outputs = []
         
-        max_mem = L // self.chunk_size
+        max_mem = (L + self.stride - 1) // self.stride + 1
         if max_mem > 0:
             memory_tensor = torch.empty((B, max_mem, D), device=h_sequence.device, dtype=h_sequence.dtype)
             mean_pool_tensor = torch.empty((B, max_mem, D), device=h_sequence.device, dtype=h_sequence.dtype)
         num_mem = 0
         
-        # Xử lý song song theo từng chunk
-        for c_start in range(0, L, self.chunk_size):
+        prev_end = 0
+        
+        # Xử lý Overlapping Chunking
+        for c_start in range(0, L, self.stride):
             c_end = min(c_start + self.chunk_size, L)
             h_chunk = h_sequence[:, c_start:c_end, :]  # [B, S, D]
             S = h_chunk.size(1)
@@ -148,7 +152,12 @@ class SSCModule(nn.Module):
             else:
                 h_tilde_chunk = h_chunk
                 
-            outputs.append(h_tilde_chunk)
+            # Trích xuất các token mới để tránh trùng lặp ở output (ngăn Causal Leakage)
+            if prev_end < c_end:
+                start_idx_in_chunk = prev_end - c_start
+                new_tokens = h_tilde_chunk[:, start_idx_in_chunk:, :]
+                outputs.append(new_tokens)
+                prev_end = c_end
             
             # Cập nhật Memory Buffers nếu đây là 1 chunk hoàn chỉnh
             if S == self.chunk_size:

@@ -142,6 +142,7 @@ parser.add_argument('--CP_loss_weight', type=float, default=0.1)
 # NTNRec
 ################
 parser.add_argument('--mc_chunk_size', type=int, default=10)
+parser.add_argument('--mc_stride', type=int, default=5)
 parser.add_argument('--mc_top_k', type=int, default=2)
 parser.add_argument('--mc_num_gru_layers', type=int, default=2)
 
