@@ -17,8 +17,14 @@ def train(args, export_root=None):
             '_' + str(args.weight_decay) + '_' + str(args.bert_dropout) + '_' + str(args.bert_attn_dropout)
 
     train, val, test = dataloader_factory(args)
-    model = LRU(args)
-    trainer = LRUTrainer(args, model, train, val, test, export_root, args.use_wandb)
+    
+    if args.model_code == 'ntnrec':
+        model = NTNRec(args)
+        trainer = NTNRecTrainer(args, model, train, val, test, export_root, args.use_wandb)
+    else:
+        model = LRU(args)
+        trainer = LRUTrainer(args, model, train, val, test, export_root, args.use_wandb)
+        
     trainer.train()
     trainer.test()
 

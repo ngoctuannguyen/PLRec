@@ -29,8 +29,9 @@ class LRUTrainer(BaseTrainer):
             logits = logits.reshape(-1, logits.size(-1))
             labels = labels.reshape(-1)
             ##### 0.3 is a weight factor of loss function
-            loss = self.ce(logits, labels) + \
-                  args.CP_loss_weight * self.CP(seqs)
+            loss = self.ce(logits, labels) 
+            # + \
+            #       args.CP_loss_weight * self.CP(seqs)
         else:
             logits, labels_ = self.model(seqs, labels=labels)
             logits = logits.reshape(-1, logits.size(-1))

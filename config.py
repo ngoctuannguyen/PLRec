@@ -43,7 +43,7 @@ def set_template(args):
     args.val_batch_size = batch * 2
     args.test_batch_size = batch * 2
 
-    args.model_code = 'lru'
+    if args.model_code is None: args.model_code = 'lru'
     if torch.cuda.is_available(): args.device = 'cuda'
     else: args.device = 'cpu'
     args.optimizer = 'AdamW'
@@ -137,5 +137,12 @@ parser.add_argument('--contrastive_loss_weight', type=float, default=0.1)
 ################
 parser.add_argument('--idcl_temperature', type=float, default=0.1)
 parser.add_argument('--CP_loss_weight', type=float, default=0.1)
+
+################
+# NTNRec
+################
+parser.add_argument('--mc_chunk_size', type=int, default=10)
+parser.add_argument('--mc_top_k', type=int, default=2)
+parser.add_argument('--mc_num_gru_layers', type=int, default=2)
 
 args = parser.parse_args()

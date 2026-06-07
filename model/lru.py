@@ -55,7 +55,7 @@ class LRUEmbedding(nn.Module):
         embed_size = args.bert_hidden_units
         
         self.token = nn.Embedding(vocab_size, embed_size)
-        self.layer_norm = nn.LayerNorm(embed_size)
+        self.layer_norm = nn.RMSNorm(embed_size)
         self.embed_dropout = nn.Dropout(args.bert_dropout)
         self.positional_embedding = nn.Embedding(vocab_size, embed_size)
 
@@ -162,7 +162,7 @@ class LRULayer(nn.Module):
         
         # Dropout and layer norm
         self.dropout = nn.Dropout(p=dropout)
-        self.layer_norm = nn.LayerNorm(self.embed_size)
+        self.layer_norm = nn.RMSNorm(self.embed_size)
 
     def lru_parallel(self, i, h, lamb, mask, B, L, D):
         # Parallel algorithm, see: https://kexue.fm/archives/9554#%E5%B9%B6%E8%A1%8C%E5%8C%96
@@ -211,7 +211,7 @@ class PositionwiseFeedForward(nn.Module):
         self.w_1 = nn.Linear(d_model, d_ff * 2)
         self.w_2 = nn.Linear(d_ff, d_model)
         self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.LayerNorm(d_model)
+        self.layer_norm = nn.RMSNorm(d_model)
 
     def forward(self, x):
         x_proj = self.w_1(x)  # [B, L, d_ff*2]
