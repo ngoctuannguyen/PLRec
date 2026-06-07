@@ -76,20 +76,20 @@ class NTNRecModel(nn.Module):
             assert labels is not None
             if self.training:
                 num_samples = self.args.negative_sample_size
-                samples = torch.randint(1, self.args.num_items+1, size=(*augmented.shape[:2], num_samples,))
-                all_items = torch.cat([samples.to(labels.device), labels.unsqueeze(-1)], dim=-1)
+                samples = torch.randint(1, self.args.num_items+1, size=(*augmented.shape[:2], num_samples,), device=labels.device)
+                all_items = torch.cat([samples, labels.unsqueeze(-1)], dim=-1)
                 sampled_embeddings = embedding_weight[all_items]
                 scores = torch.einsum('b l d, b l i d -> b l i', augmented, sampled_embeddings) + self.bias[all_items]
-                labels_ = (torch.ones(labels.shape).long() * num_samples).to(labels.device)
+                labels_ = torch.full_like(labels, num_samples)
                 return scores, labels_
             else:
                 num_samples = self.args.xlong_negative_sample_size
-                samples = torch.randint(1, self.args.num_items+1, size=(augmented.shape[0], num_samples,))
-                all_items = torch.cat([samples.to(labels.device), labels], dim=-1)
+                samples = torch.randint(1, self.args.num_items+1, size=(augmented.shape[0], num_samples,), device=labels.device)
+                all_items = torch.cat([samples, labels], dim=-1)
                 sampled_embeddings = embedding_weight[all_items]
                 scores = torch.einsum('b l d, b i d -> b l i', augmented, sampled_embeddings) + self.bias[all_items.unsqueeze(1)]
-                labels_ = (torch.ones(labels.shape).long() * num_samples).to(labels.device)
-                return scores, labels_.reshape(labels.shape)
+                labels_ = torch.full_like(labels, num_samples)
+                return scores, labels_
 
 class SSCModule(nn.Module):
     def __init__(self, hidden_size, chunk_size, top_k=2):
@@ -98,42 +98,66 @@ class SSCModule(nn.Module):
         self.chunk_size = chunk_size
         self.top_k = top_k
         
-        self.w_q = nn.Linear(hidden_size, hidden_size)
-        self.w_k = nn.Linear(hidden_size, hidden_size)
-        self.w_v = nn.Linear(hidden_size, hidden_size)
+        self.w_u = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, h_sequence):
         B, L, D = h_sequence.size()
         outputs = []
-        memory_buffer = []
         
-        for t in range(L):
-            h_t = h_sequence[:, t, :]
+        max_mem = L // self.chunk_size
+        if max_mem > 0:
+            memory_tensor = torch.empty((B, max_mem, D), device=h_sequence.device, dtype=h_sequence.dtype)
+            mean_pool_tensor = torch.empty((B, max_mem, D), device=h_sequence.device, dtype=h_sequence.dtype)
+        num_mem = 0
+        
+        # Xử lý song song theo từng chunk
+        for c_start in range(0, L, self.chunk_size):
+            c_end = min(c_start + self.chunk_size, L)
+            h_chunk = h_sequence[:, c_start:c_end, :]  # [B, S, D]
+            S = h_chunk.size(1)
             
-            if len(memory_buffer) > 0:
-                M_tensor = torch.stack(memory_buffer, dim=1)
+            if num_mem > 0:
+                past_mems = memory_tensor[:, :num_mem, :]  # [B, Num_Mem, D]
+                past_means = mean_pool_tensor[:, :num_mem, :]  # [B, Num_Mem, D]
                 
-                q_t = self.w_q(h_t).unsqueeze(1)
-                K = self.w_k(M_tensor)
-                V = self.w_v(M_tensor)
+                # Routing Query (u_t = x_t W_u)
+                u_chunk = self.w_u(h_chunk)  # [B, S, D]
                 
-                scores = torch.bmm(q_t, K.transpose(1, 2)) / (self.hidden_size ** 0.5)
+                # Relevance scores cho past chunks: r_t^(i) = <u_t, MeanPooling(S^(i))>
+                past_scores = torch.bmm(u_chunk, past_means.transpose(1, 2)) / (self.hidden_size ** 0.5) # [B, S, Num_Mem]
                 
-                if M_tensor.size(1) > self.top_k:
-                    topk_vals, topk_idx = torch.topk(scores, self.top_k, dim=-1)
-                    mask = torch.full_like(scores, float('-inf'))
-                    scores = mask.scatter_(-1, topk_idx, topk_vals)
-                    
-                attn_weights = F.softmax(scores, dim=-1)
-                agg_ssc = torch.bmm(attn_weights, V).squeeze(1)
+                # Chọn Top-K
+                topk_k = min(self.top_k, num_mem)
+                if num_mem > topk_k:
+                    topk_vals, topk_idx = torch.topk(past_scores, topk_k, dim=-1)
+                    mask = torch.full_like(past_scores, float('-inf'))
+                    past_scores = mask.scatter_(-1, topk_idx, topk_vals)
                 
-                h_tilde = h_t + agg_ssc
+                # Relevance score cho online chunk (Cumulative Mean)
+                cum_sum = torch.cumsum(h_chunk, dim=1)
+                lengths = torch.arange(1, S+1, device=h_chunk.device, dtype=h_chunk.dtype).view(1, S, 1)
+                cum_mean = cum_sum / lengths
+                online_scores = torch.sum(u_chunk * cum_mean, dim=-1, keepdim=True) / (self.hidden_size ** 0.5) # [B, S, 1]
+                
+                # Joint Softmax gating (Eq 17)
+                joint_scores = torch.cat([online_scores, past_scores], dim=-1) # [B, S, 1 + Num_Mem]
+                joint_probs = F.softmax(joint_scores, dim=-1) # [B, S, 1 + Num_Mem]
+                
+                online_prob = joint_probs[:, :, 0:1] # [B, S, 1]
+                past_probs = joint_probs[:, :, 1:] # [B, S, Num_Mem]
+                
+                # Aggregation
+                agg_past = torch.bmm(past_probs, past_mems) # [B, S, D]
+                h_tilde_chunk = online_prob * h_chunk + agg_past
             else:
-                h_tilde = h_t
+                h_tilde_chunk = h_chunk
                 
-            outputs.append(h_tilde)
+            outputs.append(h_tilde_chunk)
             
-            if (t + 1) % self.chunk_size == 0:
-                memory_buffer.append(h_tilde.detach())
+            # Cập nhật Memory Buffers nếu đây là 1 chunk hoàn chỉnh
+            if S == self.chunk_size:
+                memory_tensor[:, num_mem, :] = h_tilde_chunk[:, -1, :].detach()
+                mean_pool_tensor[:, num_mem, :] = h_chunk.mean(dim=1).detach()
+                num_mem += 1
                 
-        return torch.stack(outputs, dim=1)
+        return torch.cat(outputs, dim=1)
