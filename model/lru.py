@@ -78,7 +78,10 @@ class LRUModel(nn.Module):
         # self.hidden_size =20
         layers = args.bert_num_blocks
 
-        self.lru_blocks = nn.ModuleList([LRUBlock(self.args) for _ in range(layers)])
+        use_mc = getattr(args, 'use_memory_caching', False)
+        self.lru_blocks = nn.ModuleList([
+            LRUBlock(self.args, use_memory_caching=use_mc) for _ in range(layers)
+        ])
         self.bias = torch.nn.Parameter(torch.zeros(args.num_items + 1))
 
     def forward(self, x, embedding_weight, mask, labels=None):
@@ -118,7 +121,7 @@ class LRUModel(nn.Module):
             
 
 class LRUBlock(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, use_memory_caching=False):
         super().__init__()
         self.args = args
         hidden_size = args.bert_hidden_units
@@ -126,9 +129,21 @@ class LRUBlock(nn.Module):
             d_model=hidden_size, dropout=args.bert_attn_dropout)
         self.feed_forward = PositionwiseFeedForward(
             d_model=hidden_size, d_ff=hidden_size*4, dropout=args.bert_dropout)
+        
+        self.memory_caching = None
+        if use_memory_caching:
+            from .memory_caching import MemoryCaching
+            self.memory_caching = MemoryCaching(
+                hidden_size=hidden_size,
+                chunk_size=getattr(args, 'mc_chunk_size', 10),
+                stride=getattr(args, 'mc_stride', 5),
+                top_k=getattr(args, 'mc_top_k', 2),
+            )
     
     def forward(self, x, mask):
         x = self.lru_layer(x, mask)
+        if self.memory_caching is not None:
+            x = self.memory_caching(x, mask)
         x = self.feed_forward(x)
         return x
     

@@ -146,4 +146,9 @@ parser.add_argument('--mc_stride', type=int, default=5)
 parser.add_argument('--mc_top_k', type=int, default=2)
 parser.add_argument('--mc_num_gru_layers', type=int, default=2)
 
+################
+# Memory Caching (MC) for LRU
+################
+parser.add_argument('--use_memory_caching', action='store_true', default=False)
+
 args = parser.parse_args()

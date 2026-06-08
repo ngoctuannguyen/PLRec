@@ -116,34 +116,63 @@ class SSCWrapper(nn.Module):
         B, L, D = x_sequence.size()
         outputs = []
         
-        max_mem = (L + self.stride - 1) // self.stride + 1
-        if max_mem > 0:
-            memory_tensor = torch.empty((B, max_mem, D), device=x_sequence.device, dtype=x_sequence.dtype)
-            mean_pool_tensor = torch.empty((B, max_mem, D), device=x_sequence.device, dtype=x_sequence.dtype)
-        num_mem = 0
+        # 1. Tính toán Padding
+        N = (L + self.stride - 1) // self.stride
+        req_L = (N - 1) * self.stride + self.chunk_size
+        pad_size = req_L - L
         
+        if pad_size > 0:
+            x_padded = F.pad(x_sequence, (0, 0, 0, pad_size))
+            m_padded = F.pad(mask_sequence, (0, pad_size)) if mask_sequence is not None else None
+        else:
+            x_padded = x_sequence
+            m_padded = mask_sequence
+            
+        # 2. Unfold để tạo Mega Batch cho tất cả các chunks
+        # [B, D, N, chunk_size] -> [B, N, chunk_size, D]
+        x_unfolded = x_padded.unfold(1, self.chunk_size, self.stride).permute(0, 2, 3, 1).contiguous()
+        x_flat = x_unfolded.view(B * N, self.chunk_size, D)
+        
+        # 3. Chạy qua Local Encoder 1 LẦN DUY NHẤT cho tất cả chunks
+        if m_padded is not None:
+            m_unfolded = m_padded.unfold(1, self.chunk_size, self.stride).contiguous()
+            m_flat = m_unfolded.view(B * N, self.chunk_size)
+            h_flat = self.local_encoder(x_flat, m_flat)
+        else:
+            h_flat = self.local_encoder(x_flat)
+            
+        h_all_chunks = h_flat.view(B, N, self.chunk_size, D)
+        
+        # 4. Tiền tính toán Query và Online Scores song song
+        u_all_chunks = self.w_u(h_all_chunks) # [B, N, chunk_size, D]
+        
+        cum_sum_all = torch.cumsum(h_all_chunks, dim=2)
+        lengths_all = torch.arange(1, self.chunk_size+1, device=x_sequence.device, dtype=x_sequence.dtype).view(1, 1, self.chunk_size, 1)
+        cum_mean_all = cum_sum_all / lengths_all
+        online_scores_all = torch.sum(u_all_chunks * cum_mean_all, dim=-1, keepdim=True) / (self.hidden_size ** 0.5) # [B, N, chunk_size, 1]
+        
+        # 5. Khởi tạo Memory Buffers
+        if N > 0:
+            memory_tensor = torch.empty((B, N, D), device=x_sequence.device, dtype=x_sequence.dtype)
+            mean_pool_tensor = torch.empty((B, N, D), device=x_sequence.device, dtype=x_sequence.dtype)
+        num_mem = 0
         prev_end = 0
         
-        # Xử lý Overlapping Chunking
-        for c_start in range(0, L, self.stride):
+        # 6. Micro-loop: Chỉ chạy SSC Routing
+        for chunk_idx, c_start in enumerate(range(0, L, self.stride)):
             c_end = min(c_start + self.chunk_size, L)
-            x_chunk = x_sequence[:, c_start:c_end, :]  # [B, S, D]
+            S = c_end - c_start
             
-            # --- Xử lý qua Local Encoder ---
-            if mask_sequence is not None:
-                m_chunk = mask_sequence[:, c_start:c_end]
-                h_chunk = self.local_encoder(x_chunk, m_chunk)
-            else:
-                h_chunk = self.local_encoder(x_chunk)
-                
-            S = h_chunk.size(1)
+            # Trích xuất dữ liệu của chunk hiện tại đã tính sẵn
+            h_chunk = h_all_chunks[:, chunk_idx, :S, :]
+            u_chunk = u_all_chunks[:, chunk_idx, :S, :]
+            online_scores = online_scores_all[:, chunk_idx, :S, :]
             
             if num_mem > 0:
-                past_mems = memory_tensor[:, :num_mem, :].clone()  # [B, Num_Mem, D]
-                past_means = mean_pool_tensor[:, :num_mem, :].clone()  # [B, Num_Mem, D]
+                past_mems = memory_tensor[:, :num_mem, :].clone()
+                past_means = mean_pool_tensor[:, :num_mem, :].clone()
                 
-                u_chunk = self.w_u(h_chunk)  # [B, S, D]
-                past_scores = torch.bmm(u_chunk, past_means.transpose(1, 2)) / (self.hidden_size ** 0.5) # [B, S, Num_Mem]
+                past_scores = torch.bmm(u_chunk, past_means.transpose(1, 2)) / (self.hidden_size ** 0.5)
                 
                 topk_k = min(self.top_k, num_mem)
                 if num_mem > topk_k:
@@ -151,21 +180,13 @@ class SSCWrapper(nn.Module):
                     mask = torch.full_like(past_scores, float('-inf'))
                     past_scores = mask.scatter_(-1, topk_idx, topk_vals)
                 
-                # Relevance score cho online chunk (Cumulative Mean)
-                cum_sum = torch.cumsum(h_chunk, dim=1)
-                lengths = torch.arange(1, S+1, device=h_chunk.device, dtype=h_chunk.dtype).view(1, S, 1)
-                cum_mean = cum_sum / lengths
-                online_scores = torch.sum(u_chunk * cum_mean, dim=-1, keepdim=True) / (self.hidden_size ** 0.5) # [B, S, 1]
+                joint_scores = torch.cat([online_scores, past_scores], dim=-1)
+                joint_probs = F.softmax(joint_scores, dim=-1)
                 
-                # Joint Softmax gating (Eq 17)
-                joint_scores = torch.cat([online_scores, past_scores], dim=-1) # [B, S, 1 + Num_Mem]
-                joint_probs = F.softmax(joint_scores, dim=-1) # [B, S, 1 + Num_Mem]
+                online_prob = joint_probs[:, :, 0:1]
+                past_probs = joint_probs[:, :, 1:]
                 
-                online_prob = joint_probs[:, :, 0:1] # [B, S, 1]
-                past_probs = joint_probs[:, :, 1:] # [B, S, Num_Mem]
-                
-                # Aggregation
-                agg_past = torch.bmm(past_probs, past_mems) # [B, S, D]
+                agg_past = torch.bmm(past_probs, past_mems)
                 h_tilde_chunk = online_prob * h_chunk + agg_past
             else:
                 h_tilde_chunk = h_chunk
