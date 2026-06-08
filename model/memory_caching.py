@@ -32,46 +32,51 @@ class MemoryCaching(nn.Module):
         B, L, D = x.size()
         outputs = []
         
-        # Tiền tính toán connector cho toàn bộ sequence
-        # u = x @ W_u: (B, L, D)
-        u_all = self.w_u(x)
-        
-        num_mem = 0
-        prev_end = 0
-        
-        # Tính N (số chunks tối đa)
-        # Sẽ cấp phát memory buffer tối đa N chunks
+        # 1. Padding để x chia hết cho stride và chunk_size
         N = (L + self.stride - 1) // self.stride
+        req_L = (N - 1) * self.stride + self.chunk_size
+        pad_size = req_L - L
+        
+        if pad_size > 0:
+            x_padded = F.pad(x, (0, 0, 0, pad_size))
+        else:
+            x_padded = x
+            
+        # 2. Unfold để tạo Mega Batch cho tất cả các chunks
+        # [B, L, D] -> [B, N, D, chunk_size] -> [B, N, chunk_size, D]
+        x_unfolded = x_padded.unfold(1, self.chunk_size, self.stride).permute(0, 1, 3, 2).contiguous()
+        h_all_chunks = x_unfolded # Ở LRU, x đã là hidden states nên ta dùng luôn làm h_all_chunks
+        
+        # 3. Tiền tính toán Query và Online Scores song song cho TẤT CẢ chunks
+        u_all_chunks = self.w_u(h_all_chunks) # [B, N, chunk_size, D]
+        
+        cum_sum_all = torch.cumsum(h_all_chunks, dim=2)
+        lengths_all = torch.arange(1, self.chunk_size+1, device=x.device, dtype=x.dtype).view(1, 1, self.chunk_size, 1)
+        cum_mean_all = cum_sum_all / lengths_all
+        online_scores_all = torch.sum(u_all_chunks * cum_mean_all, dim=-1, keepdim=True) / (self.hidden_size ** 0.5) # [B, N, chunk_size, 1]
+        
+        # 4. Khởi tạo Memory Buffers
         if N > 0:
             memory_tensor = torch.empty((B, N, D), device=x.device, dtype=x.dtype)
             mean_pool_tensor = torch.empty((B, N, D), device=x.device, dtype=x.dtype)
-            
+        num_mem = 0
+        prev_end = 0
+        
+        # 5. Micro-loop: Chỉ chạy SSC Routing (rất nhẹ)
         for chunk_idx, c_start in enumerate(range(0, L, self.stride)):
             c_end = min(c_start + self.chunk_size, L)
             S = c_end - c_start
             
-            # Trích xuất chunk hiện tại từ sequence đã tính sẵn
-            h_chunk = x[:, c_start:c_end, :] # (B, S, D)
-            u_chunk = u_all[:, c_start:c_end, :] # (B, S, D)
-            
-            # Tính cumulative mean cho online score
-            # (B, S, D)
-            cum_sum = torch.cumsum(h_chunk, dim=1)
-            lengths = torch.arange(1, S + 1, device=x.device, dtype=x.dtype).view(1, S, 1)
-            cum_mean = cum_sum / lengths
-            
-            # Tính online_score (self-reference)
-            # ⟨u, cumulative_mean⟩ / sqrt(D)
-            online_scores = torch.sum(u_chunk * cum_mean, dim=-1, keepdim=True) / (self.hidden_size ** 0.5) # (B, S, 1)
+            # Trích xuất dữ liệu của chunk hiện tại đã tính sẵn
+            h_chunk = h_all_chunks[:, chunk_idx, :S, :]
+            u_chunk = u_all_chunks[:, chunk_idx, :S, :]
+            online_scores = online_scores_all[:, chunk_idx, :S, :]
             
             if num_mem > 0:
                 past_mems = memory_tensor[:, :num_mem, :].clone()
                 past_means = mean_pool_tensor[:, :num_mem, :].clone()
                 
-                # Tính relevance scores cho các past chunks
-                # r_i = ⟨u, mean_pool(chunk_i)⟩
-                # u_chunk: (B, S, D), past_means: (B, N', D)
-                # past_scores: (B, S, N')
+                # Tính past scores với tensor shapes: u_chunk(B, S, D) bmm past_means(B, N', D)^T -> (B, S, N')
                 past_scores = torch.bmm(u_chunk, past_means.transpose(1, 2)) / (self.hidden_size ** 0.5)
                 
                 # Top-k selection
@@ -81,31 +86,27 @@ class MemoryCaching(nn.Module):
                     mask_score = torch.full_like(past_scores, float('-inf'))
                     past_scores = mask_score.scatter_(-1, topk_idx, topk_vals)
                 
-                # Joint softmax
-                joint_scores = torch.cat([online_scores, past_scores], dim=-1) # (B, S, 1 + N')
+                joint_scores = torch.cat([online_scores, past_scores], dim=-1)
                 joint_probs = F.softmax(joint_scores, dim=-1)
                 
-                online_prob = joint_probs[:, :, 0:1] # (B, S, 1)
-                past_probs = joint_probs[:, :, 1:] # (B, S, N')
+                online_prob = joint_probs[:, :, 0:1]
+                past_probs = joint_probs[:, :, 1:]
                 
-                # Aggregate
-                agg_past = torch.bmm(past_probs, past_mems) # (B, S, N') @ (B, N', D) -> (B, S, D)
+                agg_past = torch.bmm(past_probs, past_mems)
                 h_tilde_chunk = online_prob * h_chunk + agg_past
             else:
                 h_tilde_chunk = h_chunk
                 
-            # Trích xuất các token mới để tránh trùng lặp
+            # Trích xuất các token mới để tránh trùng lặp ở output (ngăn Causal Leakage)
             if prev_end < c_end:
                 start_idx_in_chunk = prev_end - c_start
                 new_tokens = h_tilde_chunk[:, start_idx_in_chunk:, :]
                 outputs.append(new_tokens)
                 prev_end = c_end
                 
-            # Cập nhật Memory Buffers nếu chunk này hoàn chỉnh
+            # Cập nhật Memory Buffers nếu đây là 1 chunk hoàn chỉnh
             if S == self.chunk_size:
-                # Lấy hidden state cuối cùng của aggregated chunk để cache (checkpoint)
                 memory_tensor[:, num_mem, :] = h_tilde_chunk[:, -1, :].detach()
-                # Tính mean pool từ original h_chunk
                 mean_pool_tensor[:, num_mem, :] = h_chunk.mean(dim=1).detach()
                 num_mem += 1
                 
