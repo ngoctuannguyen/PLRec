@@ -195,7 +195,10 @@ class LRULayer(nn.Module):
         h1, h2 = h[:, :l // 2], h[:, l // 2:]  # Divide data in half
 
         if i > 1: lamb = torch.cat((lamb, lamb * lamb[-1]), 0)
-        h2 = h2 + lamb * h1[:, -1:] * mask_[:, l // 2 - 1:l // 2].unsqueeze(-1)
+        
+        intermediate = lamb * h1[:, -1:] * mask_[:, l // 2 - 1:l // 2].unsqueeze(-1)
+        h2 = h2 + intermediate
+        
         h = torch.cat([h1, h2], axis=1)
         return h, lamb
 
