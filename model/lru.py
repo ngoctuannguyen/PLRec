@@ -79,8 +79,9 @@ class LRUModel(nn.Module):
         layers = args.bert_num_blocks
 
         use_mc = getattr(args, 'use_memory_caching', False)
+        use_selective = getattr(args, 'selective_lru', False)
         self.lru_blocks = nn.ModuleList([
-            LRUBlock(self.args, use_memory_caching=use_mc) for _ in range(layers)
+            LRUBlock(self.args, use_memory_caching=use_mc, selective=use_selective) for _ in range(layers)
         ])
         self.bias = torch.nn.Parameter(torch.zeros(args.num_items + 1))
 
@@ -121,12 +122,12 @@ class LRUModel(nn.Module):
             
 
 class LRUBlock(nn.Module):
-    def __init__(self, args, use_memory_caching=False):
+    def __init__(self, args, use_memory_caching=False, selective=False):
         super().__init__()
         self.args = args
         hidden_size = args.bert_hidden_units
         self.lru_layer = LRULayer(
-            d_model=hidden_size, dropout=args.bert_attn_dropout)
+            d_model=hidden_size, dropout=args.bert_attn_dropout, selective=selective)
         self.feed_forward = PositionwiseFeedForward(
             d_model=hidden_size, d_ff=hidden_size*4, dropout=args.bert_dropout)
         
@@ -154,11 +155,13 @@ class LRULayer(nn.Module):
                  dropout=0.1,
                  use_bias=True,
                  r_min=0.8,
-                 r_max=0.99):
+                 r_max=0.99,
+                 selective=False):
         super().__init__()
         self.embed_size = d_model
         self.hidden_size = 2 * d_model
         self.use_bias = use_bias
+        self.selective = selective
 
         # init nu, theta, gamma
         u1 = torch.rand(self.hidden_size)
@@ -178,6 +181,10 @@ class LRULayer(nn.Module):
         # Dropout and layer norm
         self.dropout = nn.Dropout(p=dropout)
         self.layer_norm = nn.RMSNorm(self.embed_size)
+        
+        # Selective gate: per-token lambda modulation
+        if self.selective:
+            self.gate_proj = nn.Linear(self.embed_size, self.hidden_size)
 
     def lru_parallel(self, i, h, lamb, mask, B, L, D):
         # Parallel algorithm, see: https://kexue.fm/archives/9554#%E5%B9%B6%E8%A1%8C%E5%8C%96
@@ -192,6 +199,33 @@ class LRULayer(nn.Module):
         h = torch.cat([h1, h2], axis=1)
         return h, lamb
 
+    def lru_parallel_selective(self, i, h, a, mask, B, L, D):
+        """
+        Selective parallel scan with per-position lambda.
+        
+        h: (B, L, D) - accumulated hidden states (complex)
+        a: (B, L, D) - per-position cumulative products of lambda_t (complex)
+        
+        Associative operator: (a2, h2) ⊕ (a1, h1) = (a2*a1, a2*h1 + h2)
+        """
+        l = 2 ** i
+        h = h.reshape(B * L // l, l, D)
+        a = a.reshape(B * L // l, l, D)
+        mask_ = mask.reshape(B * L // l, l)
+        
+        h1, h2 = h[:, :l // 2], h[:, l // 2:]
+        a1, a2 = a[:, :l // 2], a[:, l // 2:]
+        
+        # Merge: right half absorbs left half's accumulated state
+        # h2[j] += a2[j] * h1[-1]  (a2 encodes per-position reach-back factor)
+        h2 = h2 + a2 * h1[:, -1:] * mask_[:, l // 2 - 1:l // 2].unsqueeze(-1)
+        # Update cumulative products to span full merged segment
+        a2 = a2 * a1[:, -1:]
+        
+        h = torch.cat([h1, h2], dim=1)
+        a = torch.cat([a1, a2], dim=1)
+        return h, a
+
     def forward(self, x, mask):
         # compute bu and lambda
         nu, theta, gamma = torch.exp(self.params_log).split((1, 1, 1))
@@ -201,8 +235,18 @@ class LRULayer(nn.Module):
         # compute h in parallel
         log2_L = int(np.ceil(np.log2(h.size(1))))
         B, L, D = h.size(0), h.size(1), h.size(2)
-        for i in range(log2_L):
-            h, lamb = self.lru_parallel(i + 1, h, lamb, mask, B, L, D)
+        
+        if self.selective:
+            # Per-position lambda: λ_t = λ_base * σ(W_g · x_t)
+            # gate ∈ (0,1): controls how much past to remember
+            gate = torch.sigmoid(self.gate_proj(x))  # (B, L, hidden_size), real
+            a = lamb * gate  # (B, L, hidden_size), complex (preserves phase, scales magnitude)
+            for i in range(log2_L):
+                h, a = self.lru_parallel_selective(i + 1, h, a, mask, B, L, D)
+        else:
+            for i in range(log2_L):
+                h, lamb = self.lru_parallel(i + 1, h, lamb, mask, B, L, D)
+        
         x = self.dropout(self.out_proj(h).real) + self.out_vector(x)
         return self.layer_norm(x)  # residual connection introduced above 
     

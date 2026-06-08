@@ -151,4 +151,9 @@ parser.add_argument('--mc_num_gru_layers', type=int, default=2)
 ################
 parser.add_argument('--use_memory_caching', action='store_true', default=False)
 
+################
+# Selective LRU (per-token lambda gating)
+################
+parser.add_argument('--selective_lru', action='store_true', default=False)
+
 args = parser.parse_args()
