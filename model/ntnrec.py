@@ -42,6 +42,14 @@ class NTNRecEmbedding(nn.Module):
         x = self.token(x)
         return self.layer_norm(self.embed_dropout(x)), mask
 
+class GRULocalEncoder(nn.Module):
+    def __init__(self, gru):
+        super().__init__()
+        self.gru = gru
+    def forward(self, x, mask=None):
+        out, _ = self.gru(x)
+        return out
+
 class NTNRecModel(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -56,19 +64,19 @@ class NTNRecModel(nn.Module):
             dropout=args.bert_dropout if args.mc_num_gru_layers > 1 else 0
         )
         
-        self.ssc = SSCModule(
+        self.ssc = SSCWrapper(
+            local_encoder=GRULocalEncoder(self.gru),
             hidden_size=self.hidden_size,
             chunk_size=args.mc_chunk_size,
             stride=args.mc_stride,
-            top_k=args.mc_top_k
+            top_k=args.mc_top_k,
+            detach_memory=(args.dataset_code == 'xlong')
         )
         
         self.bias = nn.Parameter(torch.zeros(args.num_items + 1))
 
     def forward(self, x, embedding_weight, mask, labels=None):
-        gru_out, _ = self.gru(x)
-        
-        augmented = self.ssc(gru_out)
+        augmented = self.ssc(x, mask)
         
         if self.args.dataset_code != 'xlong':
             scores = torch.matmul(augmented, embedding_weight.permute(1, 0)) + self.bias
@@ -92,24 +100,26 @@ class NTNRecModel(nn.Module):
                 labels_ = torch.full_like(labels, num_samples)
                 return scores, labels_
 
-class SSCModule(nn.Module):
-    def __init__(self, hidden_size, chunk_size, stride, top_k=2):
+class SSCWrapper(nn.Module):
+    def __init__(self, local_encoder, hidden_size, chunk_size, stride, top_k=2, detach_memory=True):
         super().__init__()
+        self.local_encoder = local_encoder
         self.hidden_size = hidden_size
         self.chunk_size = chunk_size
         self.stride = stride
         self.top_k = top_k
+        self.detach_memory = detach_memory
         
         self.w_u = nn.Linear(hidden_size, hidden_size)
 
-    def forward(self, h_sequence):
-        B, L, D = h_sequence.size()
+    def forward(self, x_sequence, mask_sequence=None):
+        B, L, D = x_sequence.size()
         outputs = []
         
         max_mem = (L + self.stride - 1) // self.stride + 1
         if max_mem > 0:
-            memory_tensor = torch.empty((B, max_mem, D), device=h_sequence.device, dtype=h_sequence.dtype)
-            mean_pool_tensor = torch.empty((B, max_mem, D), device=h_sequence.device, dtype=h_sequence.dtype)
+            memory_tensor = torch.empty((B, max_mem, D), device=x_sequence.device, dtype=x_sequence.dtype)
+            mean_pool_tensor = torch.empty((B, max_mem, D), device=x_sequence.device, dtype=x_sequence.dtype)
         num_mem = 0
         
         prev_end = 0
@@ -117,7 +127,15 @@ class SSCModule(nn.Module):
         # Xử lý Overlapping Chunking
         for c_start in range(0, L, self.stride):
             c_end = min(c_start + self.chunk_size, L)
-            h_chunk = h_sequence[:, c_start:c_end, :]  # [B, S, D]
+            x_chunk = x_sequence[:, c_start:c_end, :]  # [B, S, D]
+            
+            # --- Xử lý qua Local Encoder ---
+            if mask_sequence is not None:
+                m_chunk = mask_sequence[:, c_start:c_end]
+                h_chunk = self.local_encoder(x_chunk, m_chunk)
+            else:
+                h_chunk = self.local_encoder(x_chunk)
+                
             S = h_chunk.size(1)
             
             if num_mem > 0:
@@ -161,8 +179,12 @@ class SSCModule(nn.Module):
             
             # Cập nhật Memory Buffers nếu đây là 1 chunk hoàn chỉnh
             if S == self.chunk_size:
-                memory_tensor[:, num_mem, :] = h_tilde_chunk[:, -1, :].detach()
-                mean_pool_tensor[:, num_mem, :] = h_chunk.mean(dim=1).detach()
+                if self.detach_memory:
+                    memory_tensor[:, num_mem, :] = h_tilde_chunk[:, -1, :].detach()
+                    mean_pool_tensor[:, num_mem, :] = h_chunk.mean(dim=1).detach()
+                else:
+                    memory_tensor[:, num_mem, :] = h_tilde_chunk[:, -1, :]
+                    mean_pool_tensor[:, num_mem, :] = h_chunk.mean(dim=1)
                 num_mem += 1
                 
         return torch.cat(outputs, dim=1)
