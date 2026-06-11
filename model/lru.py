@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import cmath
 import numpy as np
 
 
@@ -55,7 +56,7 @@ class LRUEmbedding(nn.Module):
         embed_size = args.bert_hidden_units
         
         self.token = nn.Embedding(vocab_size, embed_size)
-        self.layer_norm = nn.RMSNorm(embed_size)
+        self.layer_norm = nn.LayerNorm(embed_size)
         self.embed_dropout = nn.Dropout(args.bert_dropout)
         self.positional_embedding = nn.Embedding(vocab_size, embed_size)
 
@@ -180,11 +181,12 @@ class LRULayer(nn.Module):
         
         # Dropout and layer norm
         self.dropout = nn.Dropout(p=dropout)
-        self.layer_norm = nn.RMSNorm(self.embed_size)
+        self.layer_norm = nn.LayerNorm(self.embed_size)
         
-        # Selective gate: per-token lambda modulation
+        # Selective gate: per-token lambda modulation (magnitude + phase)
         if self.selective:
-            self.gate_proj = nn.Linear(self.embed_size, self.hidden_size)
+            self.gate_mag_proj = nn.Linear(self.embed_size, self.hidden_size)
+            self.gate_phase_proj = nn.Linear(self.embed_size, self.hidden_size)
 
     def lru_parallel(self, i, h, lamb, mask, B, L, D):
         # Parallel algorithm, see: https://kexue.fm/archives/9554#%E5%B9%B6%E8%A1%8C%E5%8C%96
@@ -240,10 +242,13 @@ class LRULayer(nn.Module):
         B, L, D = h.size(0), h.size(1), h.size(2)
         
         if self.selective:
-            # Per-position lambda: λ_t = λ_base * σ(W_g · x_t)
-            # gate ∈ (0,1): controls how much past to remember
-            gate = torch.sigmoid(self.gate_proj(x))  # (B, L, hidden_size), real
-            a = lamb * gate  # (B, L, hidden_size), complex (preserves phase, scales magnitude)
+            # Per-position lambda: λ_t = λ_base * gate_mag * exp(i * gate_phase)
+            # gate_mag ∈ (0,1): controls how much past to remember (magnitude)
+            # gate_phase ∈ (-π, π): controls phase rotation per token
+            gate_mag = torch.sigmoid(self.gate_mag_proj(x))      # (B, L, hidden_size), real
+            gate_phase = torch.tanh(self.gate_phase_proj(x)) * math.pi  # (B, L, hidden_size), real
+            complex_gate = gate_mag * torch.exp(1j * gate_phase)  # (B, L, hidden_size), complex
+            a = lamb * complex_gate  # per-position complex λ (modulates both magnitude and phase)
             for i in range(log2_L):
                 h, a = self.lru_parallel_selective(i + 1, h, a, mask, B, L, D)
         else:
@@ -273,7 +278,7 @@ class PositionwiseFeedForward(nn.Module):
         self.w_1 = nn.Linear(d_model, d_ff * 2)
         self.w_2 = nn.Linear(d_ff, d_model)
         self.dropout = nn.Dropout(dropout)
-        self.layer_norm = nn.RMSNorm(d_model)
+        self.layer_norm = nn.LayerNorm(d_model)
 
     def forward(self, x):
         x_proj = self.w_1(x)  # [B, L, d_ff*2]
