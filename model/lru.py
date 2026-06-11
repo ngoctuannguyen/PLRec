@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import cmath
 import numpy as np
-
 
 class LRU(nn.Module):
     def __init__(self, args):
@@ -238,7 +236,7 @@ class LRULayer(nn.Module):
         h = self.in_proj(x.to(torch.cfloat)) * gamma  # bu
         
         # compute h in parallel
-        log2_L = int(np.ceil(np.log2(h.size(1))))
+        log2_L = math.ceil(math.log2(h.size(1)))
         B, L, D = h.size(0), h.size(1), h.size(2)
         
         if self.selective:
@@ -247,7 +245,7 @@ class LRULayer(nn.Module):
             # gate_phase ∈ (-π, π): controls phase rotation per token
             gate_mag = torch.sigmoid(self.gate_mag_proj(x))      # (B, L, hidden_size), real
             gate_phase = torch.tanh(self.gate_phase_proj(x)) * math.pi  # (B, L, hidden_size), real
-            complex_gate = gate_mag * torch.exp(1j * gate_phase)  # (B, L, hidden_size), complex
+            complex_gate = torch.polar(gate_mag, gate_phase)      # fused: gate_mag * exp(i * gate_phase), single CUDA kernel
             a = lamb * complex_gate  # per-position complex λ (modulates both magnitude and phase)
             for i in range(log2_L):
                 h, a = self.lru_parallel_selective(i + 1, h, a, mask, B, L, D)
